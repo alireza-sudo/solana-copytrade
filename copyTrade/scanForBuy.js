@@ -103,12 +103,13 @@ async function handleStream(client, args){
     await streamClosed; // wait for stream close or error event before closing
 }
 
-async function subscribeCommand(client, args){
-    while(true){
-        try{
-            await handleStream(client, args);           
-        } catch(error){
-            console.log("Stream error, restarting in 1 second...", error);
+async function subscribeCommand(client, args) {
+    while (true) {
+        try {
+            console.log("Starting gRPC subscription...");
+            await handleStream(client, args);
+        } catch (error) {
+            console.error("Stream error encountered. Retrying...");
             await new Promise((resolve) => setTimeout(resolve, 1000));
         }
     }
@@ -265,35 +266,64 @@ async function jitoSell(poolKeys, baseATA, quoteATA, tokenAmount){
     })
     return resp;
 }
+async function ensureAssociatedTokenAccount(mintAddress, wallet) {
+    const ataAddress = await spl.getAssociatedTokenAddress(mintAddress, wallet.publicKey);
+    const ataInfo = await connection.getAccountInfo(ataAddress);
 
-async function buyToken(poolKeys){
-    if(poolKeys.baseMint.toString() === 'So11111111111111111111111111111111111111112'){
+    if (!ataInfo) {
+        console.log("Creating new Associated Token Account (ATA)...");
+
+        const createInstruction = spl.createAssociatedTokenAccountInstruction(
+            wallet.publicKey,
+            ataAddress,
+            wallet.publicKey,
+            mintAddress
+        );
+
+        const transaction = new web3.Transaction().add(createInstruction);
+        transaction.feePayer = wallet.publicKey;
+
+        const { blockhash } = await connection.getLatestBlockhash();
+        transaction.recentBlockhash = blockhash;
+
+        await web3.sendAndConfirmTransaction(connection, transaction, [wallet]);
+        console.log("ATA created successfully:", ataAddress.toBase58());
+    } else {
+        console.log("ATA already exists:", ataAddress.toBase58());
+    }
+
+    return ataAddress;
+}
+
+async function buyToken(poolKeys) {
+    if (poolKeys.baseMint.toString() === 'So11111111111111111111111111111111111111112') {
         let temp = poolKeys.baseMint;
         poolKeys.baseMint = poolKeys.quoteMint;
         poolKeys.quoteMint = temp;
     }
 
-    const baseATA = await spl.getAssociatedTokenAddress(poolKeys.baseMint, config_1.wallet.publicKey, false);
-    const quoteATA = await spl.getAssociatedTokenAddress(poolKeys.quoteMint, config_1.wallet.publicKey, false);
+    const baseATA = await ensureAssociatedTokenAccount(poolKeys.baseMint, config_1.wallet);
+    const quoteATA = await ensureAssociatedTokenAccount(poolKeys.quoteMint, config_1.wallet);
 
     console.log(await jitoBuy(poolKeys, baseATA, quoteATA));
 }
 
-async function sellToken(poolKeys){
-    if(poolKeys.baseMint.toString() === 'So11111111111111111111111111111111111111112'){
+async function sellToken(poolKeys) {
+    if (poolKeys.baseMint.toString() === 'So11111111111111111111111111111111111111112') {
         let temp = poolKeys.baseMint;
         poolKeys.baseMint = poolKeys.quoteMint;
         poolKeys.quoteMint = temp;
     }
 
-    const baseATA = await spl.getAssociatedTokenAddress(poolKeys.baseMint, config_1.wallet.publicKey, false);
+    const baseATA = await ensureAssociatedTokenAccount(poolKeys.baseMint, config_1.wallet);
+    const quoteATA = await ensureAssociatedTokenAccount(poolKeys.quoteMint, config_1.wallet);
+
     const baseATAInfo = await connection.getParsedAccountInfo(baseATA, "processed");
-    if(baseATAInfo.value === null){
-        console.log("ATA not found");
+    if (!baseATAInfo || !baseATAInfo.value) {
+        console.log("ATA not found or empty.");
         return;
     }
-    const tokenAmount = baseATAInfo.value.data.parsed.info.tokenAmount.amount;
 
-    const quoteATA = await spl.getAssociatedTokenAddress(poolKeys.quoteMint, config_1.wallet.publicKey, false);
+    const tokenAmount = baseATAInfo.value.data.parsed.info.tokenAmount.amount;
     console.log(await jitoSell(poolKeys, baseATA, quoteATA, tokenAmount));
 }
