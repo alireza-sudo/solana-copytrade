@@ -13,31 +13,26 @@ const derivePoolKeys = require('./derivePoolKeys.js');
 const config_1 = require('../utils/config.js');
 
 const copyAccount = new web3.PublicKey(config_1.targetAccount).toBase58();
-// const copyAccount = new web3.PublicKey('nPpmNHkQnzGBTxjR64f5MunTGTD8vGLHnfmh4xGDsAU').toBase58();
-
 const connection = new web3.Connection(process.env.RPC_URL_2);
 
-// create a new Client from .env file
-// .env must have two variables "ENDPOINT" and "X_TOKEN"
 const client = new Client.default(
     process.env.ENDPOINT,
     process.env.X_TOKEN,
     undefined,
 );
 
-// subscribe request being send to gRPC, follows SubscribeRequest interface
 const req = {
     accounts: {},
     slots: {},
     transactions: {
-      raydiumLiquidityPoolV4: {
-        vote: false,
-        failed: false,
-        signature: undefined,
-        accountInclude: [copyAccount],
-        accountExclude: [],
-        accountRequired: [],
-      },
+        raydiumLiquidityPoolV4: {
+            vote: false,
+            failed: false,
+            signature: undefined,
+            accountInclude: [copyAccount],
+            accountExclude: [],
+            accountRequired: [],
+        },
     },
     transactionsStatus: {},
     entry: {},
@@ -46,10 +41,9 @@ const req = {
     accountsDataSlice: [],
     ping: undefined,
     commitment: CommitmentLevel.PROCESSED,
-}
+};
 
 const raydiumAmmParser = new RaydiumAmmParser();
-
 const TXN_FORMATTER = new TransactionFormatter();
 const IX_PARSER = new SolanaParser([]);
 IX_PARSER.addParser(
@@ -57,10 +51,11 @@ IX_PARSER.addParser(
     raydiumAmmParser.parseInstruction.bind(raydiumAmmParser),
 );
 
-async function handleStream(client, args){
-    const stream = await client.subscribe(); // subscribe for events
-    
-    // handle errors and stream end events
+
+
+async function handleStream(client, args) {
+    const stream = await client.subscribe();
+
     const streamClosed = new Promise((resolve, reject) => {
         stream.on("error", (error) => {
             console.log("ERROR", error);
@@ -75,23 +70,21 @@ async function handleStream(client, args){
         });
     });
 
-    // handle incoming data
     stream.on("data", (data) => {
-        if(data?.transaction){
+        if (data?.transaction) {
             const txn = TXN_FORMATTER.formTransactionFromJson(
                 data.transaction,
                 Date.now(),
             );
-            parseTxn(txn); // parse incoming data
+            parseTxn(txn);
         }
     });
 
-    // send a subscribe request
     await new Promise((resolve, reject) => {
         stream.write(args, (err) => {
-            if(err === null || err == undefined){
+            if (err === null || err == undefined) {
                 resolve();
-            } else{
+            } else {
                 reject();
             }
         });
@@ -100,57 +93,57 @@ async function handleStream(client, args){
         throw reason;
     });
 
-    await streamClosed; // wait for stream close or error event before closing
+    await streamClosed;
 }
 
-async function subscribeCommand(client, args){
-    while(true){
-        try{
-            await handleStream(client, args);           
-        } catch(error){
-            console.log("Stream error, restarting in 1 second...", error);
+async function subscribeCommand(client, args) {
+    while (true) {
+        try {
+            console.log("Starting gRPC subscription...");
+            await handleStream(client, args);
+        } catch (error) {
+            console.error("Stream error encountered. Retrying...");
             await new Promise((resolve) => setTimeout(resolve, 1000));
         }
     }
 }
 
-async function parseTxn(txn){
+async function parseTxn(txn) {
     let pumpfun = false;
     const parsedIxs = JSON.parse(JSON.stringify(IX_PARSER.parseTransactionWithInnerInstructions(txn), null, 2));
     console.log(new Date());
-    // console.log(parsedIxs);
-    for(let i = 0; i < parsedIxs.length; i++){
-        if(parsedIxs[i]?.name === 'swapBaseIn'){
+
+    for (let i = 0; i < parsedIxs.length; i++) {
+        if (parsedIxs[i]?.name === 'swapBaseIn') {
             const accounts = parsedIxs[i].accounts;
             const marketId = accounts.find(obj => obj.name === 'serumMarket');
             const poolKeys = await derivePoolKeys.derivePoolKeys(marketId.pubkey);
 
-            if(poolKeys.baseMint.toString() === 'So11111111111111111111111111111111111111112') pumpfun = true;
+            if (poolKeys.baseMint.toString() === 'So11111111111111111111111111111111111111112') pumpfun = true;
 
             const poolCoinTokenAccount = accounts.find(obj => obj.name === 'poolCoinTokenAccount');
             const poolPcTokenAccount = accounts.find(obj => obj.name === 'poolPcTokenAccount');
-            if(parsedIxs[i + 1].accounts[1].pubkey === poolPcTokenAccount.pubkey && pumpfun === false){
+
+            if (parsedIxs[i + 1].accounts[1].pubkey === poolPcTokenAccount.pubkey && pumpfun === false) {
                 console.log('buy');
                 buyToken(poolKeys);
-            }
-            else if(parsedIxs[i + 1].accounts[1].pubkey === poolCoinTokenAccount.pubkey && pumpfun === true){
+            } else if (parsedIxs[i + 1].accounts[1].pubkey === poolCoinTokenAccount.pubkey && pumpfun === true) {
                 console.log('buy, pumpfun');
                 buyToken(poolKeys);
             }
-            if(parsedIxs[i + 1].accounts[1].pubkey === poolCoinTokenAccount.pubkey && pumpfun === false){
+            if (parsedIxs[i + 1].accounts[1].pubkey === poolCoinTokenAccount.pubkey && pumpfun === false) {
                 console.log('sell');
                 sellToken(poolKeys);
-            }
-            else if(parsedIxs[i + 1].accounts[1].pubkey === poolPcTokenAccount.pubkey && pumpfun === true){
+            } else if (parsedIxs[i + 1].accounts[1].pubkey === poolPcTokenAccount.pubkey && pumpfun === true) {
                 console.log('sell, pumpfun');
                 sellToken(poolKeys);
             }
         }
     }
 }
+
 subscribeCommand(client, req);
 console.log('searching...');
-
 async function jitoBuy(poolKeys, baseATA, quoteATA){
     const tipAddrs = [
         "96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5", 
@@ -265,35 +258,64 @@ async function jitoSell(poolKeys, baseATA, quoteATA, tokenAmount){
     })
     return resp;
 }
+async function ensureAssociatedTokenAccount(mintAddress, wallet) {
+    const ataAddress = await spl.getAssociatedTokenAddress(mintAddress, wallet.publicKey);
+    const ataInfo = await connection.getAccountInfo(ataAddress);
 
-async function buyToken(poolKeys){
-    if(poolKeys.baseMint.toString() === 'So11111111111111111111111111111111111111112'){
+    if (!ataInfo) {
+        console.log("Creating new Associated Token Account (ATA)...");
+
+        const createInstruction = spl.createAssociatedTokenAccountInstruction(
+            wallet.publicKey,
+            ataAddress,
+            wallet.publicKey,
+            mintAddress
+        );
+
+        const transaction = new web3.Transaction().add(createInstruction);
+        transaction.feePayer = wallet.publicKey;
+
+        const { blockhash } = await connection.getLatestBlockhash();
+        transaction.recentBlockhash = blockhash;
+
+        await web3.sendAndConfirmTransaction(connection, transaction, [wallet]);
+        console.log("ATA created successfully:", ataAddress.toBase58());
+    } else {
+        console.log("ATA already exists:", ataAddress.toBase58());
+    }
+
+    return ataAddress;
+}
+
+async function buyToken(poolKeys) {
+    if (poolKeys.baseMint.toString() === 'So11111111111111111111111111111111111111112') {
         let temp = poolKeys.baseMint;
         poolKeys.baseMint = poolKeys.quoteMint;
         poolKeys.quoteMint = temp;
     }
 
-    const baseATA = await spl.getAssociatedTokenAddress(poolKeys.baseMint, config_1.wallet.publicKey, false);
-    const quoteATA = await spl.getAssociatedTokenAddress(poolKeys.quoteMint, config_1.wallet.publicKey, false);
+    const baseATA = await ensureAssociatedTokenAccount(poolKeys.baseMint, config_1.wallet);
+    const quoteATA = await ensureAssociatedTokenAccount(poolKeys.quoteMint, config_1.wallet);
 
     console.log(await jitoBuy(poolKeys, baseATA, quoteATA));
 }
 
-async function sellToken(poolKeys){
-    if(poolKeys.baseMint.toString() === 'So11111111111111111111111111111111111111112'){
+async function sellToken(poolKeys) {
+    if (poolKeys.baseMint.toString() === 'So11111111111111111111111111111111111111112') {
         let temp = poolKeys.baseMint;
         poolKeys.baseMint = poolKeys.quoteMint;
         poolKeys.quoteMint = temp;
     }
 
-    const baseATA = await spl.getAssociatedTokenAddress(poolKeys.baseMint, config_1.wallet.publicKey, false);
+    const baseATA = await ensureAssociatedTokenAccount(poolKeys.baseMint, config_1.wallet);
+    const quoteATA = await ensureAssociatedTokenAccount(poolKeys.quoteMint, config_1.wallet);
+
     const baseATAInfo = await connection.getParsedAccountInfo(baseATA, "processed");
-    if(baseATAInfo.value === null){
-        console.log("ATA not found");
+    if (!baseATAInfo || !baseATAInfo.value) {
+        console.log("ATA not found or empty.");
         return;
     }
-    const tokenAmount = baseATAInfo.value.data.parsed.info.tokenAmount.amount;
 
-    const quoteATA = await spl.getAssociatedTokenAddress(poolKeys.quoteMint, config_1.wallet.publicKey, false);
+    const tokenAmount = baseATAInfo.value.data.parsed.info.tokenAmount.amount;
     console.log(await jitoSell(poolKeys, baseATA, quoteATA, tokenAmount));
 }
