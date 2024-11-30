@@ -13,26 +13,31 @@ const derivePoolKeys = require('./derivePoolKeys.js');
 const config_1 = require('../utils/config.js');
 
 const copyAccount = new web3.PublicKey(config_1.targetAccount).toBase58();
+// const copyAccount = new web3.PublicKey('nPpmNHkQnzGBTxjR64f5MunTGTD8vGLHnfmh4xGDsAU').toBase58();
+
 const connection = new web3.Connection(process.env.RPC_URL_2);
 
+// create a new Client from .env file
+// .env must have two variables "ENDPOINT" and "X_TOKEN"
 const client = new Client.default(
     process.env.ENDPOINT,
     process.env.X_TOKEN,
     undefined,
 );
 
+// subscribe request being send to gRPC, follows SubscribeRequest interface
 const req = {
     accounts: {},
     slots: {},
     transactions: {
-        raydiumLiquidityPoolV4: {
-            vote: false,
-            failed: false,
-            signature: undefined,
-            accountInclude: [copyAccount],
-            accountExclude: [],
-            accountRequired: [],
-        },
+      raydiumLiquidityPoolV4: {
+        vote: false,
+        failed: false,
+        signature: undefined,
+        accountInclude: [copyAccount],
+        accountExclude: [],
+        accountRequired: [],
+      },
     },
     transactionsStatus: {},
     entry: {},
@@ -41,9 +46,10 @@ const req = {
     accountsDataSlice: [],
     ping: undefined,
     commitment: CommitmentLevel.PROCESSED,
-};
+}
 
 const raydiumAmmParser = new RaydiumAmmParser();
+
 const TXN_FORMATTER = new TransactionFormatter();
 const IX_PARSER = new SolanaParser([]);
 IX_PARSER.addParser(
@@ -51,11 +57,10 @@ IX_PARSER.addParser(
     raydiumAmmParser.parseInstruction.bind(raydiumAmmParser),
 );
 
-
-
-async function handleStream(client, args) {
-    const stream = await client.subscribe();
-
+async function handleStream(client, args){
+    const stream = await client.subscribe(); // subscribe for events
+    
+    // handle errors and stream end events
     const streamClosed = new Promise((resolve, reject) => {
         stream.on("error", (error) => {
             console.log("ERROR", error);
@@ -70,21 +75,23 @@ async function handleStream(client, args) {
         });
     });
 
+    // handle incoming data
     stream.on("data", (data) => {
-        if (data?.transaction) {
+        if(data?.transaction){
             const txn = TXN_FORMATTER.formTransactionFromJson(
                 data.transaction,
                 Date.now(),
             );
-            parseTxn(txn);
+            parseTxn(txn); // parse incoming data
         }
     });
 
+    // send a subscribe request
     await new Promise((resolve, reject) => {
         stream.write(args, (err) => {
-            if (err === null || err == undefined) {
+            if(err === null || err == undefined){
                 resolve();
-            } else {
+            } else{
                 reject();
             }
         });
@@ -93,7 +100,7 @@ async function handleStream(client, args) {
         throw reason;
     });
 
-    await streamClosed;
+    await streamClosed; // wait for stream close or error event before closing
 }
 
 async function subscribeCommand(client, args) {
@@ -108,42 +115,43 @@ async function subscribeCommand(client, args) {
     }
 }
 
-async function parseTxn(txn) {
+async function parseTxn(txn){
     let pumpfun = false;
     const parsedIxs = JSON.parse(JSON.stringify(IX_PARSER.parseTransactionWithInnerInstructions(txn), null, 2));
     console.log(new Date());
-
-    for (let i = 0; i < parsedIxs.length; i++) {
-        if (parsedIxs[i]?.name === 'swapBaseIn') {
+    // console.log(parsedIxs);
+    for(let i = 0; i < parsedIxs.length; i++){
+        if(parsedIxs[i]?.name === 'swapBaseIn'){
             const accounts = parsedIxs[i].accounts;
             const marketId = accounts.find(obj => obj.name === 'serumMarket');
             const poolKeys = await derivePoolKeys.derivePoolKeys(marketId.pubkey);
 
-            if (poolKeys.baseMint.toString() === 'So11111111111111111111111111111111111111112') pumpfun = true;
+            if(poolKeys.baseMint.toString() === 'So11111111111111111111111111111111111111112') pumpfun = true;
 
             const poolCoinTokenAccount = accounts.find(obj => obj.name === 'poolCoinTokenAccount');
             const poolPcTokenAccount = accounts.find(obj => obj.name === 'poolPcTokenAccount');
-
-            if (parsedIxs[i + 1].accounts[1].pubkey === poolPcTokenAccount.pubkey && pumpfun === false) {
+            if(parsedIxs[i + 1].accounts[1].pubkey === poolPcTokenAccount.pubkey && pumpfun === false){
                 console.log('buy');
                 buyToken(poolKeys);
-            } else if (parsedIxs[i + 1].accounts[1].pubkey === poolCoinTokenAccount.pubkey && pumpfun === true) {
+            }
+            else if(parsedIxs[i + 1].accounts[1].pubkey === poolCoinTokenAccount.pubkey && pumpfun === true){
                 console.log('buy, pumpfun');
                 buyToken(poolKeys);
             }
-            if (parsedIxs[i + 1].accounts[1].pubkey === poolCoinTokenAccount.pubkey && pumpfun === false) {
+            if(parsedIxs[i + 1].accounts[1].pubkey === poolCoinTokenAccount.pubkey && pumpfun === false){
                 console.log('sell');
                 sellToken(poolKeys);
-            } else if (parsedIxs[i + 1].accounts[1].pubkey === poolPcTokenAccount.pubkey && pumpfun === true) {
+            }
+            else if(parsedIxs[i + 1].accounts[1].pubkey === poolPcTokenAccount.pubkey && pumpfun === true){
                 console.log('sell, pumpfun');
                 sellToken(poolKeys);
             }
         }
     }
 }
-
 subscribeCommand(client, req);
 console.log('searching...');
+
 async function jitoBuy(poolKeys, baseATA, quoteATA){
     const tipAddrs = [
         "96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5", 
